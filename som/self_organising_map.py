@@ -21,48 +21,51 @@
 # SOFTWARE.
 
 import random
-import sys
-import xarray as xr
-import logging
 import numpy as np
 import numpy.random
-import numpy.testing as npt
-import time
 
-
-class Progress(object):
-
-    def __init__(self, label, silent=False):
-        self.label = label
-        self.last_progress_frac = None
-        self.silent = silent
-
-    def report(self, msg, progress_frac):
-        if self.silent:
-            return
-        if self.last_progress_frac is None or (progress_frac - self.last_progress_frac) >= 0.01:
-            self.last_progress_frac = progress_frac
-            i = int(100 * progress_frac)
-            if i > 100:
-                i = 100
-            si = i // 2
-            sys.stdout.write("\r%s %s %-05s %s" % (self.label, msg, str(i) + "%", "#" * si))
-            sys.stdout.flush()
-
-    def complete(self, msg):
-        if self.silent:
-            return
-        sys.stdout.write("\n%s %s\n" % (self.label, msg))
-        sys.stdout.flush()
+"""This module contains the code for training self-organising maps using numpy"""
 
 
 def find_bmu(instances, weights):
+    """
+    Find the best matching units for a set of instances within the SOM network
+    using cartesian distances
+
+    Parameters
+    ----------
+    instances:
+        2-dimensional array of instances organised by (case,instance-index)
+    weights:
+        ndarray describing the SOM network weights organised by (unit-index,instance-index)
+
+    Returns
+    -------
+        1-dimensional array organised by (case,) providing the best matching unit for each case
+    """
     sqdiffs = (instances[:, :, None] - np.transpose(weights)) ** 2
     sumsqdiffs = sqdiffs.sum(axis=1)
     return sumsqdiffs.argmin(axis=1)
 
 
 def train_batch(instances, weights, learn_rate, neighbourhood_lookup):
+    """
+    Train a batch of instances, and update the network weights, modifying the weights array
+
+    Parameters
+    ----------
+    instances:
+        2-dimensional ndarray of instances organised by (case,instance-index)
+    weights:
+        2-dimensional ndarray describing the SOM network weights organised by (unit-index,instance-index)
+    learn_rate:
+        a fraction that controls how fast the network is modified
+    neighbourhood_lookup:
+        a 2-d ndarray mask organised by (unit-index,unit-index) where the value at (M,N)
+        indicates if and by how much the unit at index N
+        is considered to be a neighbour of the activated unit at index M
+    """
+
     # winners(#instances) holds the index of the closest weight for each instance
     winners = find_bmu(instances, weights)
     # now find the neighbours of each winner that are also activated by each instance
@@ -74,7 +77,6 @@ def train_batch(instances, weights, learn_rate, neighbourhood_lookup):
     weight_indices = nhoods[:, 1]
     instance_indices = nhoods[:, 0]
     fractions = nwinners[instance_indices, weight_indices]
-    # print(fractions.shape,np.min(fractions),np.max(fractions))
 
     # get the updates
     updates = -learn_rate * fractions[:, None] * (weights[weight_indices, :] - instances[instance_indices])
@@ -91,7 +93,25 @@ def train_batch(instances, weights, learn_rate, neighbourhood_lookup):
     weights += weight_updates
 
 
-def compute_scores(instances, weights, gridwidth, minibatch_size):
+def compute_scores(instances, weights, grid_width, minibatch_size):
+    """
+    Computes the scores for a set of instances
+
+    Parameters
+    ----------
+    instances:
+        2-dimensional ndarray of instances organised by (case,instance-index)
+    weights:
+        2-dimensional ndarray describing the SOM network weights organised by (unit-index,instance-index)
+    grid_width:
+        the width of the SOM network
+    minibatch_size:
+        the number of instances to score in a single call
+
+    Returns
+    -------
+    ndarray orgainsed by (case,2) where the second dimension holds the
+    """
     index = 0
     nr_instances = instances.shape[0]
     batch_size = nr_instances if not minibatch_size else minibatch_size
@@ -100,42 +120,48 @@ def compute_scores(instances, weights, gridwidth, minibatch_size):
         last_index = min(index + batch_size, nr_instances)
         bmus[index:last_index] = find_bmu(instances[index:last_index], weights)
         index += batch_size
-    scores = np.vstack([bmus % gridwidth, bmus // gridwidth])
+    scores = np.vstack([bmus % grid_width, bmus // grid_width])
     return np.transpose(scores)
 
 
 class SelfOrganisingMap(object):
     """
-    Train Self Organising Map (SOM) with cells arranged in a 2-dimensional rectangular layout
+    Train a Self Organising Map (SOM) with cells arranged in a 2-dimensional rectangular layout
 
-    Parameters
-    ----------
-    iters : int
-        the number of training iterations to use when training the SOM
-    gridwidth : int
-        number of cells across the grid
-    gridheight : int
-        number of cells down the grid
-    initial_neighbourhood : int
-        the initial neighbourhood size
+    A lower-level (numpy-based) interface to the SOM algorithm
 
     Keyword Parameters
     ------------------
+    iterations : int
+        the number of training iterations to use when training the SOM
+    grid_width : int
+        the width of the SOM grid in cells
+    grid_height : int
+        the height of the SOM grid in cells
+    initial_neighbourhood : int
+        the initial neighbourhood size as a radius in terms of numbers of cells.  Defaults to grid_width/2 if not given.
     verbose : bool
         whether to print progress messages
     seed : int
         random seed - set to produce repeatable results
+    minibatch_size : int
+        divide input data into mini batches and only update weights after each batch
+    progress_callback: function
+        a callback that takes string, float parameters, called when each iteration completes
     """
 
-    def __init__(self, gridwidth, gridheight, iters, initial_neighbourhood=None, verbose=False, seed=None,
-                 minibatch_size=None):
-        self.gridheight = gridheight
-        self.gridwidth = gridwidth
-        self.nr_outputs = self.gridwidth * self.gridheight
-        self.iters = iters
+    def __init__(self, grid_width=10, grid_height=10, iterations=100, initial_neighbourhood=None, verbose=False,
+                 seed=None,
+                 minibatch_size=None, progress_callback=None):
+        self.grid_width = grid_width
+        self.grid_height = grid_height
         self.minibatch_size = minibatch_size
+        self.nr_outputs = self.grid_width * self.grid_height
+        self.iterations = iterations
+        self.minibatch_size = minibatch_size
+        self.progress_callback = progress_callback
 
-        self.initial_neighbourhood = initial_neighbourhood if initial_neighbourhood else int(gridsize / 3)
+        self.initial_neighbourhood = initial_neighbourhood if initial_neighbourhood else int(self.grid_width / 2)
         self.verbose = verbose
         self.seed = seed
         self.rng = random.Random()
@@ -148,26 +174,40 @@ class SelfOrganisingMap(object):
 
         # for each neighbourhood size 0,1,...initial_neighbourhood
         # build a lookup table where the fraction at neighbourhood_lookup[n,o1,o2]
-        # indicates if (and how much) weight at index o2 is a neighbour of the weight at index o1 in neighbourhood size n
+        # indicates if (and how much) weight at index o2 is a neighbour of the weight
+        # at index o1 in neighbourhood size n
         # use 1 and 0 for a binary mask, or between -1.0 and 1.0 for a varying mask
 
         for neighbourhood in range(0, self.initial_neighbourhood + 1):
             nsq = neighbourhood ** 2
-            indices = np.indices((self.gridwidth,self.gridheight))
+            indices = np.indices((self.grid_width, self.grid_height))
             x_coords = indices[0].flatten()
             y_coords = indices[1].flatten()
-            x_combinations = np.meshgrid(x_coords,x_coords)
-            y_combinations = np.meshgrid(y_coords,y_coords)
-            x_diffs = np.diff(x_combinations,axis=0)
-            y_diffs = np.diff(y_combinations,axis=0)
-            sqdists = x_diffs**2 + y_diffs**2
-            self.neighbourhood_lookup[neighbourhood,:,:] = np.where(sqdists <= nsq, 1, 0)
+            x_combinations = np.meshgrid(x_coords, x_coords)
+            y_combinations = np.meshgrid(y_coords, y_coords)
+            x_diffs = np.diff(x_combinations, axis=0)
+            y_diffs = np.diff(y_combinations, axis=0)
+            sqdists = x_diffs ** 2 + y_diffs ** 2
+            self.neighbourhood_lookup[neighbourhood, :, :] = np.where(sqdists <= nsq, 1, 0)
 
-
-    def get_weights(self, outputIndex):
-        return self.weights[:, outputIndex].tolist()
+    def report_progress(self, message, fraction_complete):
+        if self.progress_callback:
+            self.progress_callback(message, fraction_complete)
 
     def fit_transform(self, original_instances):
+        """
+        Train the SOM network on input data
+
+        Arguments
+        ---------
+        original_instances: numpy.ndarray(nr-cases,case-length)
+            The input data cases for training the network
+
+        Returns
+        -------
+        numpy.ndarray(cases,2)
+            The x- and y- locations in the trained SOM best matching each training case
+        """
 
         # mask out instances containing NaNs and remove them
         instance_mask = ~np.any(np.isnan(original_instances), axis=1)
@@ -175,7 +215,7 @@ class SelfOrganisingMap(object):
         valid_instances = original_instances[instance_mask, :]
 
         # randomly re-shuffle the remaining instances.
-        # TODO consider reshuffling after every iteration
+        # TODO consider reshuffling after every iteration?
         instances = np.copy(valid_instances)
         rng = np.random.default_rng(seed=self.seed)
         rng.shuffle(instances)
@@ -187,17 +227,16 @@ class SelfOrganisingMap(object):
         for output_idx in range(0, self.nr_outputs):
             weights[output_idx, :] = instances[self.rng.choice(range(0, nr_instances)), :]
 
-        p = Progress("SOM", silent=not self.verbose)
         progress_frac = 0.0
-        p.report("Starting", progress_frac)
+        self.report_progress("Starting", progress_frac)
 
-        for iteration in range(self.iters):
+        for iteration in range(self.iterations):
             # reduce the learning rate and neighbourhood size linearly as training progresses
             learn_rate = self.learn_rate_initial - (self.learn_rate_initial - self.learn_rate_final) * (
-                        (iteration + 1) / self.iters)
-            neighbour_limit = round(self.initial_neighbourhood * (1 - (iteration + 1) / self.iters))
+                    (iteration + 1) / self.iterations)
+            neighbour_limit = round(self.initial_neighbourhood * (1 - (iteration + 1) / self.iterations))
             neighbourhood_mask = self.neighbourhood_lookup[neighbour_limit, :, :]
-            batch_size = nr_instances if not minibatch_size else minibatch_size
+            batch_size = nr_instances if not self.minibatch_size else self.minibatch_size
 
             index = 0
             while index < nr_instances:
@@ -205,59 +244,14 @@ class SelfOrganisingMap(object):
                 train_batch(instances[index:last_index, :], weights, learn_rate, neighbourhood_mask)
                 index += batch_size
 
-            progress_frac = iteration / self.iters
-            p.report("Training neighbourhood=%d" % (neighbour_limit), progress_frac)
-
-        p.complete("SOM Training Complete")
+            progress_frac = iteration / self.iterations
+            self.report_progress("Training neighbourhood=%d" % neighbour_limit, progress_frac)
 
         # compute final scores from the trained weights
-        valid_scores = compute_scores(valid_instances, weights, self.gridwidth, self.minibatch_size)
+        valid_scores = compute_scores(valid_instances, weights, self.grid_width, self.minibatch_size)
 
         # restore the results into the same order as the input array
         scores = np.zeros(shape=(nr_original_instances, 2))
         scores[:, :] = np.nan
         scores[instance_mask, :] = valid_scores
         return scores
-
-    def coords(self, output):
-        return (output % self.gridwidth, output // self.gridwidth)
-
-    def get_output(self, x, y):
-        return x + (y * self.gridwidth)
-
-
-if __name__ == '__main__':
-    # SOM training parameters
-    gridsize = 25
-    gridheight = 25
-    iters = 10
-    minibatch_size = 1000  # the max number of instances passed in each call to train_batch
-
-    logging.basicConfig(level=logging.DEBUG)
-
-    da = xr.open_dataset("sla_c3s_clim.nc")[
-        "sla_c3s"]  # sea level anomalies averaged by month-of-year, lat and lon cell
-
-    stack_dims = ("lat", "lon")
-    stack_sizes = (da.shape[1], da.shape[2])
-
-    # each (lat,lon) position becomes an independent case
-    # flatten lat and lon dimensions and transpose to arrange by (ncases, time)
-    # where ncases = nlat*nlon
-    instances = da.stack(case=stack_dims).transpose("case", "month").values
-
-    # run SOM to reduce time dimension from 12 to 2
-    s = SelfOrganisingMap(gridsize, gridsize, iters, seed=1, verbose=True, minibatch_size=minibatch_size)
-
-
-
-    start_time = time.time()
-    scores = s.fit_transform(instances)
-    end_time = time.time()
-    print("Elapsed time: %d seconds" % (int(end_time - start_time)))
-
-    # restore lat/lon dimensions and output
-    a = scores.reshape(stack_sizes + (2,))
-    new_dims = stack_dims + ("som_axis",)
-    output = xr.DataArray(data=a, dims=new_dims, name="monthly_sla_som")
-    output.to_netcdf("som.nc")

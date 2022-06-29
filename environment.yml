@@ -1,0 +1,6 @@
+name: som_env
+dependencies:
+- python=3
+- numpy
+- xarray
+- netcdf4
