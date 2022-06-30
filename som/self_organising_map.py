@@ -222,9 +222,12 @@ class SelfOrganisingMap(object):
         numpy.ndarray(cases,2)
             The x- and y- locations in the trained SOM best matching each training case
         """
-        
+
+
         if cupy_enabled:
             original_instances = np.asarray(original_instances)
+            if self.seed:
+                np.random.seed(self.seed)
         # mask out instances containing NaNs and remove them
         instance_mask = ~np.any(np.isnan(original_instances), axis=1)
         nr_original_instances = original_instances.shape[0]
@@ -233,8 +236,7 @@ class SelfOrganisingMap(object):
         # randomly re-shuffle the remaining instances.
         # TODO consider reshuffling after every iteration?
         instances = np.copy(valid_instances)
-        rng = np.random.default_rng(seed=self.seed)
-        rng.shuffle(instances)
+        np.random.shuffle(instances)
 
         nr_inputs = instances.shape[1]
         nr_instances = instances.shape[0]
