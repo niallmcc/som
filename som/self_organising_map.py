@@ -222,7 +222,9 @@ class SelfOrganisingMap(object):
         numpy.ndarray(cases,2)
             The x- and y- locations in the trained SOM best matching each training case
         """
-
+        
+        if cupy_enabled:
+            original_instances = np.asarray(original_instances)
         # mask out instances containing NaNs and remove them
         instance_mask = ~np.any(np.isnan(original_instances), axis=1)
         nr_original_instances = original_instances.shape[0]
@@ -268,4 +270,4 @@ class SelfOrganisingMap(object):
         scores = np.zeros(shape=(nr_original_instances, 2))
         scores[:, :] = np.nan
         scores[instance_mask, :] = valid_scores
-        return scores
+        return np.asnumpy(scores) if cupy_enabled else scores
