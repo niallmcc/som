@@ -23,8 +23,9 @@
 
 import xarray as xr
 import time
+import logging
 
-from som.self_organising_map import SelfOrganisingMap
+from som.self_organising_map import SelfOrganisingMap, cupy_enabled
 from som.progress import Progress
 
 """This module contains a main program and high level interface to the SOM algorithm"""
@@ -56,6 +57,7 @@ class SomRunner:
         self.minibatch_size = minibatch_size
         self.iterations = iterations
         self.verbose = verbose
+        self.logger = logging.getLogger(SomRunner.__qualname__)
 
     def fit_transform(self, preserve_dimensions, da):
         """
@@ -76,6 +78,7 @@ class SomRunner:
         """
         progress = None
         progress_callback = None
+        self.logger.info("Calling fit_transform, cupy_enabled=%s" % str(cupy_enabled))
         if self.verbose:
             progress = Progress("SOM")
 
@@ -104,12 +107,12 @@ class SomRunner:
         # restore preserved dimensions and added som_axis
         a = scores.reshape(stack_sizes + (2,))
         new_dims = stack_dims + ("som_axis",)
+        self.logger.info("Called fit_transform")
         return xr.DataArray(data=a, dims=new_dims)
 
 
 def main():
     # SOM training parameters
-    import logging
     logging.basicConfig(level=logging.INFO)
 
     import argparse

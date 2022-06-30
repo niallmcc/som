@@ -25,6 +25,9 @@ import xarray as xr
 import math
 import random
 import unittest
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 from som.som_runner import SomRunner
 

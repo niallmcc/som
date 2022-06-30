@@ -6,6 +6,10 @@ A prototype implementation of Teuvo Kohonen's Self Organising Maps [(wikipedia p
 
 This code is released under the [MIT license](LICENSE)
 
+## Acknowledgements
+
+Nicola Martin contributed code to use the CUPY library to run this code on GPU
+
 ## Installation
 
 Clone this repo and install it into a new conda environment (requires conda or miniconda)
@@ -17,6 +21,10 @@ $ conda env create -f environment.yml
 $ conda activate som_env
 $ pip install .
 ```
+
+To run faster on GPUs, consider installing the [CuPy library](https://cupy.dev/).  If CuPy is installed 
+See [CuPy Requirements and Installation](https://docs.cupy.dev/en/stable/install.html) for more information.
+
 
 ## Running via the command line tool `somrun`
 

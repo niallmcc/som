@@ -21,10 +21,16 @@
 # SOFTWARE.
 
 import random
-import numpy as np
-import numpy.random
+try:
+    # if cupy is available, use that in place of numpy to run on GPU
+    import cupy as np
+    import cupyx
+    cupy_enabled = True
+except:
+    import numpy as np
+    cupy_enabled = False
 
-"""This module contains the code for training self-organising maps using numpy"""
+"""This module contains the code for training self-organising maps using numpy or cupy"""
 
 
 def find_bmu(instances, weights):
@@ -83,9 +89,17 @@ def train_batch(instances, weights, learn_rate, neighbourhood_lookup):
 
     # aggregate the updates for each weight
     numerator = np.zeros(shape=weights.shape)
-    np.add.at(numerator, weight_indices, updates)
+    if cupy_enabled:
+        # cupy does not support numpy.add.at but cupyx.scatter_add does what we need here
+        cupyx.scatter_add(numerator, weight_indices, updates)
+    else:
+        np.add.at(numerator, weight_indices, updates)
+
     denominator = np.zeros(shape=weights.shape[:1])[:, None]
-    np.add.at(denominator, weight_indices, 1)
+    if cupy_enabled:
+        cupyx.scatter_add(denominator, weight_indices, 1)
+    else:
+        np.add.at(denominator, weight_indices, 1)
     denominator = np.where(numerator == 0, 1, denominator)  # fix annoying divide by zero warning
     weight_updates = numerator / denominator
 
