@@ -22,7 +22,7 @@ $ conda activate som_env
 $ pip install .
 ```
 
-To run faster on GPUs, consider installing the [CuPy library](https://cupy.dev/).  If CuPy is installed 
+To run faster on GPUs, consider installing the [CuPy library](https://cupy.dev/).  
 See [CuPy Requirements and Installation](https://docs.cupy.dev/en/stable/install.html) for more information.
 
 
