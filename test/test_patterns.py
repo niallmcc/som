@@ -19,6 +19,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import sys
 
 import numpy as np
 import xarray as xr
@@ -62,10 +63,12 @@ class TestPatterns(unittest.TestCase):
         """
         arr = np.zeros(shape=(nr_cases, case_length))
         pat = np.zeros(shape=(nr_cases,))
+        labels = []
         rng = random.Random(seed)
         offsets = [2 * math.pi * pattern / nr_patterns for pattern in range(nr_patterns)]
         amps = [1 + 0.5 * rng.random() for _ in range(nr_patterns)]
         for i in range(nr_cases):
+            labels.append(f"case{i}")
             pattern = rng.choice(range(nr_patterns))
             noise = np.array([rng.random() * noise_weight for _ in range(case_length)])
             arr[i, :] = np.array(
@@ -76,6 +79,8 @@ class TestPatterns(unittest.TestCase):
         ds = xr.Dataset()
         ds["pattern_input"] = xr.DataArray(data=arr, dims=("j", "i"))
         ds["pattern_class"] = xr.DataArray(data=pat, dims=("j",))
+        ds["pattern_label"] = xr.DataArray(data=np.array(labels),dims=("j",))
+        ds["mean_pattern_input"] = ds["pattern_input"].mean(dim=("i",))
         return ds
 
     def test_data_generation(self):
@@ -86,13 +91,26 @@ class TestPatterns(unittest.TestCase):
         """Check that SOM can separate classes, given some distinct distributions"""
         ds = TestPatterns.generate_pattern1(nr_cases=1000, case_length=50, noise_weight=0.5)
         grid_width, grid_height = 10, 10
-        runner = SomRunner(iterations=100, grid_width=grid_width,
-                           grid_height=grid_height)
-        cluster_da = runner.fit_transform(["j"], ds["pattern_input"])
-        assignments = self.__get_class_assignments(ds, cluster_da)
-        non_separations, summary_text = self.__summarise_class_assignments(assignments, grid_width, grid_height)
-        print(summary_text)
-        self.assertTrue(non_separations == 0)
+        iterations = 50
+
+        for hexagonal in [False,True]:
+            runner = SomRunner(iterations=iterations, grid_width=grid_width,
+                               grid_height=grid_height, hexagonal=hexagonal)
+            cluster_da = runner.fit_transform(["j"], ds["pattern_input"])
+            ds["som_assignment"] = cluster_da
+            (cell_x,cell_y) = runner.get_cell_centres()
+            ds["cell_centres_x"] = cell_x
+            ds["cell_centres_y"] = cell_y
+            print(ds)
+            if hexagonal:
+                ds.to_netcdf("test_hexagonal.nc")
+            else:
+                ds.to_netcdf("test_square.nc")
+
+            assignments = self.__get_class_assignments(ds, cluster_da)
+            non_separations, summary_text = self.__summarise_class_assignments(assignments, grid_width, grid_height, hexagonal)
+            print(summary_text)
+            self.assertTrue(non_separations == 0)
 
     @staticmethod
     def __get_class_assignments(input_ds, output_da):
@@ -115,24 +133,26 @@ class TestPatterns(unittest.TestCase):
         return assignments
 
     @staticmethod
-    def __summarise_class_assignments(assignments, grid_width, grid_height):
+    def __summarise_class_assignments(assignments, grid_width, grid_height, hexagonal):
         """Analyse a dictionary returned by __get_class_assignments, return the number of
         grid cells where multiple input classes were matched (non-separations) and a text
         summary of the grid showing which (if any) class was matched to each grid cell"""
         summary_text = ""
         non_separations = 0
-        for x in range(grid_width):
+        for y in range(grid_height):
             row = ""
-            for y in range(grid_height):
+            if hexagonal and y % 2 == 1:
+                row += " "
+            for x in range(grid_width):
                 if (x, y) not in assignments:
-                    row += "."
+                    row += ". "
                 else:
                     classes = assignments[(x, y)]
                     if len(classes) > 2:
-                        row += "?"
+                        row += "? "
                         non_separations += 1
                     else:
                         cls = list(classes.keys())[0]
-                        row += str(cls)
+                        row += str(cls)+" "
             summary_text += row + "\n"
         return non_separations, summary_text

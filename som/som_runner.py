@@ -27,13 +27,14 @@ import logging
 
 from som.self_organising_map import SelfOrganisingMap, cupy_enabled
 from som.progress import Progress
+from som.plot.plot import Plot
 
 """This module contains a main program and high level interface to the SOM algorithm"""
 
 
 class SomRunner:
 
-    def __init__(self, grid_width=10, grid_height=None, minibatch_size=1000, iterations=100, verbose=True):
+    def __init__(self, grid_width=10, grid_height=None, hexagonal=False, minibatch_size=1000, iterations=100, verbose=True):
         """
         Train a Self Organising Map (SOM) with cells arranged in a 2-dimensional rectangular layout
 
@@ -45,6 +46,8 @@ class SomRunner:
             the width of the SOM grid in cells
         grid_height : int
             the height of the SOM grid in cells
+        hexagonal : bool
+            whether to use a hexagonal grid
         minibatch_size : int
             divide input data into mini batches and only update weights after each batch
         iterations : int
@@ -54,10 +57,12 @@ class SomRunner:
         """
         self.grid_width = grid_width
         self.grid_height = grid_height if grid_height else grid_width
+        self.hexagonal = hexagonal
         self.minibatch_size = minibatch_size
         self.iterations = iterations
         self.verbose = verbose
         self.logger = logging.getLogger(SomRunner.__qualname__)
+        self.cell_centres = None
 
     def fit_transform(self, preserve_dimensions, da):
         """
@@ -74,7 +79,7 @@ class SomRunner:
         -------
         xarray.DataArray
             Output data containing the preserved dimensions plus a new som_axis dimension of size 2, containing
-            the x- and y- locations of the assigments made by the fitted SOM
+            the x- and y- locations of the assignments made by the fitted SOM
         """
         progress = None
         progress_callback = None
@@ -95,10 +100,15 @@ class SomRunner:
 
         instances = da.stack(case=stack_dims).transpose("case", *collapse_dimensions).values
 
-        # run SOM to reduce time dimension from 12 to 2
-        som = SelfOrganisingMap(grid_width=self.grid_width, grid_height=self.grid_height,
+        # run SOM
+        som = SelfOrganisingMap(grid_width=self.grid_width, grid_height=self.grid_height, hexagonal=self.hexagonal,
                                 iterations=self.iterations, seed=1, verbose=True,
                                 minibatch_size=self.minibatch_size, progress_callback=progress_callback)
+
+        # store the coordinates of each cell centre
+        print(som.cell_centres.shape)
+        self.cell_centres_x = xr.DataArray(data=som.cell_centres[0,:,:],dims=("grid_x", "grid_y"))
+        self.cell_centres_y = xr.DataArray(data=som.cell_centres[1,:,:], dims=("grid_x", "grid_y"))
 
         scores = som.fit_transform(instances)
         if progress:
@@ -108,7 +118,20 @@ class SomRunner:
         a = scores.reshape(stack_sizes + (2,))
         new_dims = stack_dims + ("som_axis",)
         self.logger.info("Called fit_transform")
-        return xr.DataArray(data=a, dims=new_dims)
+        return xr.DataArray(data=a, dims=new_dims, attrs={
+            "grid_width": self.grid_width,
+            "grid_height": self.grid_width,
+            "iterations": self.iterations,
+            "minibatch_size": self.minibatch_size,
+            "layout": "hexagonal" if self.hexagonal else "square"
+        })
+
+    def get_cell_centres(self):
+        """
+        Get an xarray.DataArrays containing the x- and y-coordinates of each cell centre respectively
+        :return: (cell-centre-x-coords, cell-centre-y-coords)
+        """
+        return (self.cell_centres_x, self.cell_centres_y)
 
 
 def main():
@@ -132,33 +155,86 @@ def main():
     parser.add_argument("--grid-height", type=int,
                         help="the height of the map grid, defaults to the same as the width if not specified",
                         default=None)
+    parser.add_argument("--hexagonal", action="store_true",
+                        help="whether to use a hexagonal grid, offsetting the centers of each cell in odd numbered rows",
+                        default=None)
     parser.add_argument("--iterations", type=int,
                         help="sets the number of iterations to run "
                              "(in each iteration, all of the input data is used to train the som network)",
                         default=100)
-    parser.add_argument("--minibatch_size", type=int,
+    parser.add_argument("--minibatch-size", type=int,
                         help="sets the number of input data items passed",
                         default=100)
 
+    # plotting related options
+    parser.add_argument("--svg-plot-path", type=str,
+                        help="plot the SOM assignments to a SVG file",
+                        default="")
+    parser.add_argument("--svg-plot-color-variable", type=str,
+                        help="the name of a variable to use to color the plotted cells, or 'freq'",
+                        default="freq")
+    parser.add_argument("--svg-plot-color-variable-min", type=float,
+                        help="minimum value for the cell color variable",
+                        default=None)
+    parser.add_argument("--svg-plot-color-variable-max", type=float,
+                        help="maximum value for the cell color variable",
+                        default=None)
+    parser.add_argument("--svg-plot-label-variable", type=str,
+                       help="the name of a variable to use to plot cases on the map",
+                       default="")
+    parser.add_argument("--svg-plot-colors", type=str,
+                        help="comma separated list of colors",
+                        default="blue,red")
+    parser.add_argument("--svg-plot-default-color", type=str,
+                        help="color to use for empty cells",
+                        default="#A0A0A0")
+
     args = parser.parse_args()
     logging.info("Reading input data from %s" % args.input_path)
-    input_ds = xr.open_dataset(args.input_path)
-    input_da = input_ds[args.input_variable]
+    ds = xr.open_dataset(args.input_path)
+    input_da = ds[args.input_variable]
 
     start_time = time.time()
     sr = SomRunner(grid_width=args.grid_width,
-                   grid_height=args.grid_height, minibatch_size=args.minibatch_size,
+                   grid_height=args.grid_height, hexagonal=args.hexagonal,
+                   minibatch_size=args.minibatch_size,
                    iterations=args.iterations,verbose=True)
     result_da = sr.fit_transform(tuple(args.preserve_dimensions), input_da)
-
-    preserve_attrs = {dim: input_ds[dim].attrs for dim in args.preserve_dimensions if dim in input_ds}
-    input_ds[args.output_variable] = result_da
-    for (dim, attrs) in preserve_attrs.items():
-        input_ds[dim].attrs = attrs
     end_time = time.time()
+
+    # xarray datasets can lose dimension attributes when new dataarrays are assigned.
+    # back them up now to be restored later...
+    preserve_attrs = {dim: ds[dim].attrs for dim in args.preserve_dimensions if dim in ds}
+
+    # assign the SOM allocated cell coordinates for each input case
+    ds[args.output_variable] = result_da
+
+    # and assign the cell centres
+    (cell_x, cell_y) = sr.get_cell_centres()
+    ds["cell_centres_x"] = cell_x
+    ds["cell_centres_y"] = cell_y
+
+    # restore dimension attributes
+    for (dim, attrs) in preserve_attrs.items():
+        ds[dim].attrs = attrs
+
     logging.info("Elapsed time: %d seconds" % (int(end_time - start_time)))
-    input_ds.to_netcdf(args.output_path)
-    logging.info("Written outptut data to %s" % args.output_path)
+    ds.to_netcdf(args.output_path)
+    logging.info("Written output data to %s" % args.output_path)
+
+    if args.svg_plot_path:
+        plt = Plot(ds,
+                   label_name=args.svg_plot_label_variable,
+                   som_name=args.output_variable,
+                   cell_x_name="cell_centres_x",
+                   cell_y_name="cell_centres_y",
+                   color_name=args.svg_plot_color_variable,
+                   colors=args.svg_plot_colors.split(","),
+                   color_value_min=args.svg_plot_color_variable_min,
+                   color_value_max=args.svg_plot_color_variable_max,
+                   default_color=args.svg_plot_default_color)
+        plt.plot(args.svg_plot_path)
+        logging.info("Written output plot to %s" % args.svg_plot_path)
 
 
 
