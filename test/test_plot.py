@@ -33,7 +33,7 @@ from som.plot.svgdoc import SvgDoc
 from som.plot.rectangle import Rectangle
 from som.plot.hexagon import Hexagon
 from som.plot.text import Text
-from som.plot.plot import Plot
+from som.plot.som_plot import SomPlot
 
 """This module implements unit tests for the som package"""
 
@@ -53,12 +53,12 @@ class TestPlot(unittest.TestCase):
     def test_hexagonal_plot(self):
         ds = xr.open_dataset("test_hexagonal.nc")
         # plt = Plot(ds,color_name="mean_pattern_input")
-        plt = Plot(ds, color_name="pattern_class")
+        plt = SomPlot(ds, color_name="pattern_class")
         plt.plot("test_hexagonal.svg")
 
     def test_square_plot(self):
         ds = xr.open_dataset("test_square.nc")
-        plt = Plot(ds,color_name="mean_pattern_input")
+        plt = SomPlot(ds, color_name="mean_pattern_input")
         plt.plot("test_square.svg")
 
 
