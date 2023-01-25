@@ -1,6 +1,6 @@
 name: som_env
 dependencies:
-- python=3
+- python=3.9
 - numpy
 - xarray
 - netcdf4

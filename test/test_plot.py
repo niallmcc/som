@@ -1,6 +1,6 @@
 # MIT License
 #
-# Copyright (c) 2022 Niall McCarroll
+# Copyright (c) 2022-2023 Niall McCarroll
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -20,26 +20,21 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import numpy as np
-import xarray as xr
-import math
-import random
 import unittest
 import logging
 
+from test.test_patterns import TestPatterns
+from som.plot.pysvg import SvgDoc, Rectangle, Hexagon, Text
+from som.som_plotter import SomPlot
+from som.som_runner import SomRunner
+
 logging.basicConfig(level=logging.INFO)
 
-from som.plot.svgdoc import SvgDoc
-from som.plot.rectangle import Rectangle
-from som.plot.hexagon import Hexagon
-from som.plot.text import Text
-from som.plot.som_plot import SomPlot
 
 """This module implements unit tests for the som package"""
 
 
 class TestPlot(unittest.TestCase):
-
 
     def test_basic(self):
         """Check that basic shapes can be plotted"""
@@ -51,14 +46,29 @@ class TestPlot(unittest.TestCase):
             f.write(doc.render())
 
     def test_hexagonal_plot(self):
-        ds = xr.open_dataset("test_hexagonal.nc")
-        # plt = Plot(ds,color_name="mean_pattern_input")
-        plt = SomPlot(ds, color_name="pattern_class")
+        ds = TestPatterns.generate_pattern1(nr_cases=1000, case_length=50, noise_weight=0.5)
+        grid_width, grid_height = 10, 10
+        iterations = 50
+
+        runner = SomRunner(iterations=iterations, grid_width=grid_width,
+                               grid_height=grid_height, hexagonal=True)
+        runner.fit_transform(ds,reduce_dimensions=["i"],input_variable_names=["pattern_input"])
+
+        plt = SomPlot(ds, color_name="pattern_input")
         plt.plot("test_hexagonal.svg")
 
     def test_square_plot(self):
-        ds = xr.open_dataset("test_square.nc")
-        plt = SomPlot(ds, color_name="mean_pattern_input")
+        ds = TestPatterns.generate_pattern1(nr_cases=1000, case_length=50, noise_weight=0.5)
+        grid_width, grid_height = 10, 10
+        iterations = 50
+
+        runner = SomRunner(iterations=iterations, grid_width=grid_width,
+                           grid_height=grid_height, hexagonal=False)
+        runner.fit_transform(ds, reduce_dimensions=["i"], input_variable_names=["pattern_input"])
+
+        plt = SomPlot(ds, color_name="pattern_input")
         plt.plot("test_square.svg")
 
 
+if __name__ == '__main__':
+    unittest.main()

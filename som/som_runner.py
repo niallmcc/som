@@ -1,6 +1,6 @@
 # MIT License
 #
-# Copyright (c) 2022 Niall McCarroll
+# Copyright (c) 2022-2023 Niall McCarroll
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -25,10 +25,10 @@ import xarray as xr
 import numpy as np
 import time
 import logging
+import re
 
 from som.self_organising_map import SelfOrganisingMap, cupy_enabled
 from som.progress import Progress
-from som.plot.som_plot import SomPlot
 
 """This module contains a main program and high level interface to the SOM algorithm"""
 
@@ -65,21 +65,30 @@ class SomRunner:
         self.logger = logging.getLogger(SomRunner.__qualname__)
         self.cell_centres = None
 
-    def fit_transform(self, preserve_dimensions, data_arrays):
+    def fit_transform(self, dataset, reduce_dimensions, input_variable_names, output_variable_name="som_assignments",
+                      output_variable_xcoords_name="cell_centres_x", output_variable_ycoords_name="cell_centres_y"):
         """
         Fit a SOM model on some input data, and then return the cell assignments for each training case
 
         Parameters
         ----------
-        preserve_dimensions: tuple or list
-            The names of the dimensions in the input data to preserve.  Must contain at least one dimension.
-        datat_arrays: a list of one or more xarray.DataArray
-            The input data
+        dataset: xarray.Dataset
+            The xarray dataset containing the input data variables to be modelled, and to which the SOM assignments are to be written
+        reduce_dimensions: list[str]
+            The name(s) of the dimension(s) in the input data to reduce to the SOM assignment.
+        input_variable_names: list[str]
+            The name(s) of the input variable(s) in the dataset to model
+        output_variable_name: str
+            The name of the output variable to create with the SOM assignments
+        output_variable_xcoords_name: str
+            The name of an ancillary variable to create in the dataset, storing the x-coordinates of each cell centre
+        output_variable_ycoords_name: str
+            The name of an ancillary variable to create in the dataset, storing the y-coordinates of each cell centre
 
         Returns
         -------
         xarray.DataArray
-            Output data containing the preserved dimensions plus a new som_axis dimension of size 2, containing
+            Output data containing the original dimensions apart from the along_dimension being replaced with the som_axis dimension of size 2, containing
             the x- and y- locations of the assignments made by the fitted SOM
         """
         progress = None
@@ -91,10 +100,32 @@ class SomRunner:
             def progress_callback(m, frac):
                 progress.report(m, frac)
 
+        input_sources = []
+        for input_variable_name in input_variable_names:
+            m = re.match(r"([^\(]+)\(([^\)]+)\)",input_variable_name)
+            if m:
+                input_sources.append((m.group(2),m.group(1)))
+            else:
+                input_sources.append((input_variable_name,""))
+
+        def adjust(da,fn):
+            if fn:
+                if fn == "log10":
+                    return np.log10(da)
+                elif fn == "log":
+                    return np.log(da)
+                elif fn == "sqrt":
+                    return np.sqrt(da)
+                else:
+                    raise ValueError(f"Unable to apply unrecognised function {fn}")
+            return da
+
+        data_arrays = [adjust(dataset[input_variable_name],fn) for (input_variable_name,fn) in input_sources]
         da = data_arrays[0]
         # work out which dimensions in the input data will be collapsed and replaced
         # with the som_axis dimension (of size 2)
-        collapse_dimensions = [dim for dim in da.dims if dim not in preserve_dimensions]
+
+        preserve_dimensions = [dim for dim in da.dims if dim not in reduce_dimensions]
         # the other dimensions will be kept, but stack them into one dimension for running SOM
         # (they will be restored later)
         stack_dims = tuple(preserve_dimensions)
@@ -102,9 +133,15 @@ class SomRunner:
 
         flattened_arrays = []
         for da in data_arrays:
-            flattened_arrays.append(da.stack(case=stack_dims).transpose("case", *collapse_dimensions).values)
+            mean = da.mean()
+            sdev = da.std()
+            da = (da - mean) / sdev
+            # reduce to a 2D array (case,values)
+            da = da.stack(case=stack_dims)
+            da = da.transpose("case",*reduce_dimensions)
+            da = da.stack(values=tuple(reduce_dimensions))
+            flattened_arrays.append(da.values)
         instances = np.concatenate(flattened_arrays,axis=1)
-        print(instances.shape)
 
         # run SOM
         som = SelfOrganisingMap(grid_width=self.grid_width, grid_height=self.grid_height, hexagonal=self.hexagonal,
@@ -112,9 +149,8 @@ class SomRunner:
                                 minibatch_size=self.minibatch_size, progress_callback=progress_callback)
 
         # store the coordinates of each cell centre
-        print(som.cell_centres.shape)
-        self.cell_centres_x = xr.DataArray(data=som.cell_centres[0,:,:],dims=("grid_x", "grid_y"))
-        self.cell_centres_y = xr.DataArray(data=som.cell_centres[1,:,:], dims=("grid_x", "grid_y"))
+        cell_centres_x = xr.DataArray(data=som.cell_centres[0,:,:],dims=("grid_x", "grid_y"))
+        cell_centres_y = xr.DataArray(data=som.cell_centres[1,:,:], dims=("grid_x", "grid_y"))
 
         scores = som.fit_transform(instances)
         if progress:
@@ -124,20 +160,33 @@ class SomRunner:
         a = scores.reshape(stack_sizes + (2,))
         new_dims = stack_dims + ("som_axis",)
         self.logger.info("Called fit_transform")
-        return xr.DataArray(data=a, dims=new_dims, attrs={
+        result_da = xr.DataArray(data=a, dims=new_dims, attrs={
             "grid_width": self.grid_width,
             "grid_height": self.grid_width,
             "iterations": self.iterations,
             "minibatch_size": self.minibatch_size,
+            "based_on": ",".join(input_variable_names),
             "layout": "hexagonal" if self.hexagonal else "square"
         })
 
-    def get_cell_centres(self):
-        """
-        Get an xarray.DataArrays containing the x- and y-coordinates of each cell centre respectively
-        :return: (cell-centre-x-coords, cell-centre-y-coords)
-        """
-        return (self.cell_centres_x, self.cell_centres_y)
+        # xarray datasets can lose dimension attributes when new dataarrays are assigned.
+        # back them up now to be restored later...
+
+        preserve_attrs = {dim: dataset[dim].attrs for dim in preserve_dimensions if dim in dataset}
+
+        # assign the SOM allocated cell coordinates for each input case
+        dataset[output_variable_name] = result_da
+
+        # and assign the cell centre x- and y-coordinates to arrays
+        if output_variable_xcoords_name:
+            dataset[output_variable_xcoords_name] = cell_centres_x
+        if output_variable_ycoords_name:
+            dataset[output_variable_ycoords_name] = cell_centres_y
+
+        # restore dimension attributes
+        for (dim, attrs) in preserve_attrs.items():
+            dataset[dim].attrs = attrs
+
 
 
 def main():
@@ -147,23 +196,23 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("input_path",
-                        help="the path to an input xarray dataset (in netcdf4 format) containing the data to load")
-    parser.add_argument("input_variable", help="comma separated list of the names of input variables to select (within an input dataset)")
+                        help="the path to an input dataset (in netcdf4 format) containing the data to load")
     parser.add_argument("output_path",
-                        help="the path to an output xarray dataset to write the original data+som output to")
-    parser.add_argument("output_variable", help="the name of the output variable to add")
-    parser.add_argument("--preserve-dimensions", nargs='+',
-                        help="the name of dimension(s) in the input data to preserve.  "
-                             "The other dimensions will be replaced by the som_axis dimension with size 2.",
-                        required=True)
+                        help="the path to an output dataset to write the original data+som output to")
+    parser.add_argument("--input-variables", nargs="+",
+                        help="the names of input variable(s) to use (within an input dataset)",required=True)
+    parser.add_argument("--som-variable", help="the name of the output variable to add", default="som_assignments")
+    parser.add_argument("--reduce-dimensions", nargs="+",
+                        help="the name(s) of dimension(s) in the input data to reduce and replace with the som axis.",
+                        default=[])
     parser.add_argument("--grid-width", type=int,
                         help="the width of the map grid", default=10)
     parser.add_argument("--grid-height", type=int,
                         help="the height of the map grid, defaults to the same as the width if not specified",
                         default=None)
-    parser.add_argument("--hexagonal", action="store_true",
-                        help="whether to use a hexagonal grid, offsetting the centers of each cell in odd numbered rows",
-                        default=None)
+    parser.add_argument("--grid-layout",
+                        help="set the grid layout to hexagonal or square",
+                        default="hexagonal")
     parser.add_argument("--iterations", type=int,
                         help="sets the number of iterations to run "
                              "(in each iteration, all of the input data is used to train the som network)",
@@ -172,75 +221,25 @@ def main():
                         help="sets the number of input data items passed",
                         default=100)
 
-    # plotting related options
-    parser.add_argument("--svg-plot-path", type=str,
-                        help="plot the SOM assignments to a SVG file",
-                        default="")
-    parser.add_argument("--svg-plot-color-variable", type=str,
-                        help="the name of a variable to use to color the plotted cells, or 'freq'",
-                        default="freq")
-    parser.add_argument("--svg-plot-color-variable-min", type=float,
-                        help="minimum value for the cell color variable",
-                        default=None)
-    parser.add_argument("--svg-plot-color-variable-max", type=float,
-                        help="maximum value for the cell color variable",
-                        default=None)
-    parser.add_argument("--svg-plot-label-variable", type=str,
-                       help="the name of a variable to use to plot cases on the map",
-                       default="")
-    parser.add_argument("--svg-plot-colors", type=str,
-                        help="comma separated list of colors",
-                        default="blue,red")
-    parser.add_argument("--svg-plot-default-color", type=str,
-                        help="color to use for empty cells",
-                        default="#A0A0A0")
-
     args = parser.parse_args()
     logging.info("Reading input data from %s" % args.input_path)
     ds = xr.open_dataset(args.input_path)
 
+    input_variables = args.input_variables
+
     start_time = time.time()
     sr = SomRunner(grid_width=args.grid_width,
-                   grid_height=args.grid_height, hexagonal=args.hexagonal,
+                   grid_height=args.grid_height,
+                   hexagonal=(args.grid_layout == "hexagonal"),
                    minibatch_size=args.minibatch_size,
                    iterations=args.iterations,verbose=True)
-    result_da = sr.fit_transform(tuple(args.preserve_dimensions), [ds[input_variable_name] for input_variable_name in args.input_variable.split(",")])
+    sr.fit_transform(ds, args.reduce_dimensions, input_variable_names=input_variables,
+                     output_variable_name=args.som_variable)
     end_time = time.time()
-
-    # xarray datasets can lose dimension attributes when new dataarrays are assigned.
-    # back them up now to be restored later...
-    preserve_attrs = {dim: ds[dim].attrs for dim in args.preserve_dimensions if dim in ds}
-
-    # assign the SOM allocated cell coordinates for each input case
-    ds[args.output_variable] = result_da
-
-    # and assign the cell centres
-    (cell_x, cell_y) = sr.get_cell_centres()
-    ds["cell_centres_x"] = cell_x
-    ds["cell_centres_y"] = cell_y
-
-    # restore dimension attributes
-    for (dim, attrs) in preserve_attrs.items():
-        ds[dim].attrs = attrs
 
     logging.info("Elapsed time: %d seconds" % (int(end_time - start_time)))
     ds.to_netcdf(args.output_path)
     logging.info("Written output data to %s" % args.output_path)
-
-    if args.svg_plot_path:
-        plt = SomPlot(ds,
-                      label_name=args.svg_plot_label_variable,
-                      som_name=args.output_variable,
-                      cell_x_name="cell_centres_x",
-                      cell_y_name="cell_centres_y",
-                      color_name=args.svg_plot_color_variable,
-                      colors=args.svg_plot_colors.split(","),
-                      color_value_min=args.svg_plot_color_variable_min,
-                      color_value_max=args.svg_plot_color_variable_max,
-                      default_color=args.svg_plot_default_color)
-        plt.plot(args.svg_plot_path)
-        logging.info("Written output plot to %s" % args.svg_plot_path)
-
 
 
 if __name__ == '__main__':
