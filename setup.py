@@ -16,7 +16,8 @@ setup(
     zip_safe=False,
     entry_points={
         'console_scripts': [
-            'somrun = som.som_runner:main'
+            'somrun = som.som_runner:main',
+            'somplot = som.som_plotter:main'
         ]
     }
 )

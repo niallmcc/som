@@ -1,6 +1,6 @@
 # MIT License
 #
-# Copyright (c) 2022 Niall McCarroll
+# Copyright (c) 2022-2023 Niall McCarroll
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -21,6 +21,8 @@
 # SOFTWARE.
 
 import random
+import math
+
 try:
     # if cupy is available, use that in place of numpy to run on GPU
     import cupy as np
@@ -152,6 +154,8 @@ class SelfOrganisingMap(object):
         the width of the SOM grid in cells
     grid_height : int
         the height of the SOM grid in cells
+    hexagonal : bool
+        whether to use a hexagonal grid
     initial_neighbourhood : int
         the initial neighbourhood size as a radius in terms of numbers of cells.  Defaults to grid_width/2 if not given.
     verbose : bool
@@ -164,11 +168,12 @@ class SelfOrganisingMap(object):
         a callback that takes string, float parameters, called when each iteration completes
     """
 
-    def __init__(self, grid_width=10, grid_height=10, iterations=100, initial_neighbourhood=None, verbose=False,
+    def __init__(self, grid_width=10, grid_height=10, hexagonal=True, iterations=100, initial_neighbourhood=None, verbose=False,
                  seed=None,
                  minibatch_size=None, progress_callback=None):
         self.grid_width = grid_width
         self.grid_height = grid_height
+        self.hexagonal = hexagonal
         self.minibatch_size = minibatch_size
         self.nr_outputs = self.grid_width * self.grid_height
         self.iterations = iterations
@@ -186,22 +191,40 @@ class SelfOrganisingMap(object):
         self.learn_rate_final = 0.001
         self.neighbourhood_lookup = np.zeros(shape=(self.initial_neighbourhood + 1, self.nr_outputs, self.nr_outputs))
 
+        # work out the coordinates of each cell centre
+        self.cell_centres = np.array(np.indices((self.grid_width, self.grid_height)),dtype=float)
+        if self.hexagonal:
+            # shift the x-coordinates for odd numbered rows by 0.5
+            # so that the coordinates represent the centers of hexagonal cells
+            hex_radius = (0.5/math.cos(math.pi/6))
+            y_spacing = hex_radius + hex_radius*math.sin(math.pi/6)
+            for y_index in range(self.grid_height):
+                for x_index in range(self.grid_height):
+                    if y_index % 2 == 1:
+                        self.cell_centres[0][x_index, y_index] += 1.0
+                    else:
+                        self.cell_centres[0][x_index, y_index] += 0.5
+                    self.cell_centres[1,x_index,y_index] *= y_spacing
+                    self.cell_centres[1,x_index,y_index] += 1
+        else:
+            self.cell_centres += 0.5
+
         # for each neighbourhood size 0,1,...initial_neighbourhood
         # build a lookup table where the fraction at neighbourhood_lookup[n,o1,o2]
         # indicates if (and how much) weight at index o2 is a neighbour of the weight
         # at index o1 in neighbourhood size n
         # use 1 and 0 for a binary mask, or between -1.0 and 1.0 for a varying mask
 
+        x_coords = self.cell_centres[0].flatten()
+        y_coords = self.cell_centres[1].flatten()
+        x_combinations = np.meshgrid(x_coords, x_coords)
+        y_combinations = np.meshgrid(y_coords, y_coords)
+        x_diffs = np.diff(x_combinations, axis=0)
+        y_diffs = np.diff(y_combinations, axis=0)
+        sqdists = x_diffs ** 2 + y_diffs ** 2
+
         for neighbourhood in range(0, self.initial_neighbourhood + 1):
             nsq = neighbourhood ** 2
-            indices = np.indices((self.grid_width, self.grid_height))
-            x_coords = indices[0].flatten()
-            y_coords = indices[1].flatten()
-            x_combinations = np.meshgrid(x_coords, x_coords)
-            y_combinations = np.meshgrid(y_coords, y_coords)
-            x_diffs = np.diff(x_combinations, axis=0)
-            y_diffs = np.diff(y_combinations, axis=0)
-            sqdists = x_diffs ** 2 + y_diffs ** 2
             self.neighbourhood_lookup[neighbourhood, :, :] = np.where(sqdists <= nsq, 1, 0)
 
     def report_progress(self, message, fraction_complete):
