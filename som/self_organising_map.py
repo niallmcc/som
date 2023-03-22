@@ -28,9 +28,11 @@ try:
     import cupy as np
     import cupyx
     cupy_enabled = True
+    extract_data = lambda arr: np.asnumpy(arr)
 except:
     import numpy as np
     cupy_enabled = False
+    extract_data = lambda arr: arr
 
 """This module contains the code for training self-organising maps using numpy or cupy"""
 
@@ -295,4 +297,15 @@ class SelfOrganisingMap(object):
         scores = np.zeros(shape=(nr_original_instances, 2))
         scores[:, :] = np.nan
         scores[instance_mask, :] = valid_scores
-        return np.asnumpy(scores) if cupy_enabled else scores
+        return extract_data(scores)
+
+    def get_cell_centres(self):
+        """
+        Get the chart coordinates of the centre of each cell
+
+        Returns
+        -------
+        numpy.ndarray(2,grid-width,grid-height)
+            The x- and y- coordinates of each cell centre.  x coordinates at [0,:,:], y coordinates at [1,:,:]
+        """
+        return extract_data(self.cell_centres)

@@ -148,9 +148,10 @@ class SomRunner:
                                 iterations=self.iterations, seed=1, verbose=True,
                                 minibatch_size=self.minibatch_size, progress_callback=progress_callback)
 
+        cell_centres = som.get_cell_centres()
         # store the coordinates of each cell centre
-        cell_centres_x = xr.DataArray(data=som.cell_centres[0,:,:],dims=("grid_x", "grid_y"))
-        cell_centres_y = xr.DataArray(data=som.cell_centres[1,:,:], dims=("grid_x", "grid_y"))
+        cell_centres_x = xr.DataArray(data=cell_centres[0,:,:],dims=("grid_x", "grid_y"))
+        cell_centres_y = xr.DataArray(data=cell_centres[1,:,:], dims=("grid_x", "grid_y"))
 
         scores = som.fit_transform(instances)
         if progress:
