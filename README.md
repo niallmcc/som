@@ -10,6 +10,14 @@ This code is released under the [MIT license](LICENSE)
 
 Nicola Martin contributed code to use the CUPY library to run this code on GPU
 
+## Quick Example
+
+This tool can make some nice plots - if you like hexagons:
+
+From this [Blog Post](https://blogs.reading.ac.uk/weather-and-climate-at-reading/2023/from-urumqi-to-minneapolis-clustering-city-climates-with-self-organising-maps/):
+
+![image](https://github.com/niallmcc/som/assets/58978249/9af43e1a-00d5-4a9a-9748-76d39f403e33)
+
 ## Installation
 
 Clone this repo and install it into a new conda environment (requires conda or miniconda)
